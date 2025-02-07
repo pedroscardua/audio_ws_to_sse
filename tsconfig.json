@@ -1,0 +1,11 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",            // ou outra versão compatível com o Node atual
+    "module": "ESNext",            // gera código em ES Modules
+    "moduleResolution": "node",
+    "esModuleInterop": true,
+    "outDir": "dist",              // pasta de saída
+    "strict": true
+  },
+  "include": ["src/**/*.ts"]
+}
