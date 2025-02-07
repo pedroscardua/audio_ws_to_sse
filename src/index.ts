@@ -100,7 +100,9 @@ app.get('/stream', (req, res) => {
 
   remoteWs.on('close', () => {
     console.log('WebSocket connection closed');
-    res.end(); // Encerra a conexão SSE
+    setTimeout(() => {
+      res.end(); // Encerra a conexão SSE
+    }, 8000);
   });
 
   // A cada CHUNK_DURATION_SECONDS (1 segundo), processa os chunks acumulados,
