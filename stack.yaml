@@ -1,0 +1,21 @@
+version: '3.7'
+
+services:
+  stream_audracs_audio:
+    image: pedroscardua/stream_audracs_audio:01
+    deploy:
+      replicas: 1
+      labels:
+        - traefik.enable=true
+        - traefik.http.routers.stream_audracs_audio.rule=Host(`stream.audracs.com.br`)
+        - traefik.http.routers.stream_audracs_audio.entrypoints=websecure
+        - traefik.http.services.stream_audracs_audio.loadbalancer.sticky=true
+        - traefik.http.routers.stream_audracs_audio.tls.certresolver=letsencryptresolver
+        - traefik.http.services.stream_audracs_audio.loadbalancer.server.port=3000
+        - traefik.http.services.stream_audracs_audio.loadbalancer.passHostHeader=true
+    networks:
+      - network_public
+      
+networks:
+  network_public:
+    external: true

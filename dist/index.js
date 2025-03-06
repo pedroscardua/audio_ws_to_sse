@@ -16,12 +16,12 @@ import lamejs from '@breezystack/lamejs';
 const app = express();
 // Add CORS middleware
 app.use(cors({
-    origin: ['http://localhost:60794', 'http://localhost:3002'],
+    origin: ['http://localhost:57061', 'http://localhost:3002'],
     methods: ['GET'],
     credentials: true
 }));
 const server = http.createServer(app);
-const port = 3002;
+const port = 3004;
 // Configurações de áudio e MP3
 const sampleRate = 32000; // Taxa de amostragem (ex.: 32000 Hz)
 const channels = 1; // Mono
@@ -86,7 +86,9 @@ app.get('/stream', (req, res) => {
     });
     remoteWs.on('close', () => {
         console.log('WebSocket connection closed');
-        res.end(); // Encerra a conexão SSE
+        setTimeout(() => {
+            res.end(); // Encerra a conexão SSE
+        }, 8000);
     });
     // A cada CHUNK_DURATION_SECONDS (1 segundo), processa os chunks acumulados,
     // convertendo-os para MP3 e enviando via SSE
