@@ -20,7 +20,7 @@ const app = express();
 
 // Add CORS middleware
 app.use(cors({
-  origin: ['http://localhost:57061', 'http://localhost:3002','stream.audracs.com.br'],
+  origin: ['http://localhost:57061', 'http://localhost:3002','https://app.audracs.com.br'],
   methods: ['GET'],
   credentials: true
 }));
