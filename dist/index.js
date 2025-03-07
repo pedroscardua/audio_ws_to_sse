@@ -1,22 +1,12 @@
 import express from 'express';
-import http from 'http';
+import * as http from 'http';
 import WebSocket from 'ws';
 import cors from 'cors';
-// ts@ignore
-//var lamejs = require("lamejs");
-import lamejs from '@breezystack/lamejs';
-// Em algum lugar no seu código assíncrono:
-(async () => {
-    const lamejsModule = await import('@breezystack/lamejs');
-    const lamejs = lamejsModule.default; // ou utilize a exportação que desejar
-    // Agora você pode usar o lamejs normalmente:
-    const encoder = new lamejs.Mp3Encoder(1, 32000, 128);
-    // ...
-})();
+import * as lamejs from '@breezystack/lamejs';
 const app = express();
 // Add CORS middleware
 app.use(cors({
-    origin: ['http://localhost:57061', 'http://localhost:3002'],
+    origin: ['http://localhost:57061', 'http://localhost:3002', 'https://app.audracs.com.br'],
     methods: ['GET'],
     credentials: true
 }));
@@ -39,11 +29,13 @@ let filterState = 0;
  * 4. Envia o MP3 em Base64 via SSE para o cliente
  */
 app.get('/stream', (req, res) => {
-    const wsURL = req.query.wsURL;
-    if (!wsURL) {
-        res.status(400).send('Parâmetro wsURL é obrigatório.');
+    //const wsURL = req.query.wsURL as string;
+    const idCall = req.query.id;
+    if (!idCall) {
+        res.status(400).send('Parâmetro id é obrigatório.');
         return;
     }
+    const wsURL = 'wss://phone-call-websocket.aws-us-west-2-backend-production3.vapi.ai/' + req.query.id + '/listen';
     // Buffer para armazenar os chunks de áudio (cada chunk é um Int16Array)
     let audioBuffer = [];
     // Configura a resposta para Server-Sent Events (SSE)

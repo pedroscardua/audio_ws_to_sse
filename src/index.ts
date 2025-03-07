@@ -1,20 +1,8 @@
-import express from 'express';
-import http from 'http';
+import express, { Request, Response } from 'express';
+import * as http from 'http';
 import WebSocket from 'ws';
 import cors from 'cors';
-// ts@ignore
-//var lamejs = require("lamejs");
-import lamejs from '@breezystack/lamejs'; 
-
-// Em algum lugar no seu código assíncrono:
-(async () => {
-  const lamejsModule = await import('@breezystack/lamejs');
-  const lamejs = lamejsModule.default; // ou utilize a exportação que desejar
-
-  // Agora você pode usar o lamejs normalmente:
-  const encoder = new lamejs.Mp3Encoder(1, 32000, 128);
-  // ...
-})();
+import * as lamejs from '@breezystack/lamejs';
 
 const app = express();
 
@@ -46,89 +34,180 @@ let filterState = 0;
  * 4. Envia o MP3 em Base64 via SSE para o cliente
  */
 app.get('/stream', (req, res) => {
-  const wsURL = req.query.wsURL as string;
-  if (!wsURL) {
-    res.status(400).send('Parâmetro wsURL é obrigatório.');
+  const wsURL1 = req.query.url as string;
+  let retryCount = 0;
+  let MAX_RETRIES = 30;
+  let RETRY_DELAY = 500;
+
+  if (!wsURL1) {
+    res.status(400).send('Parâmetro id é obrigatório.');
     return;
   }
 
-  // Buffer para armazenar os chunks de áudio (cada chunk é um Int16Array)
-  let audioBuffer: Int16Array[] = [];
-
-  // Configura a resposta para Server-Sent Events (SSE)
-  res.writeHead(200, {
-    'Content-Type': 'text/event-stream',
-    'Cache-Control': 'no-cache',
-    'Connection': 'keep-alive'
-  });
-
-  // Conecta ao WebSocket remoto que transmite áudio em binário (PCM 16-bit)
-  const remoteWs = new WebSocket(wsURL);
-  remoteWs.binaryType = 'arraybuffer';
-
-  remoteWs.on('open', () => {
-    console.log('Conectado ao WebSocket remoto:', wsURL);
-  });
-
-  // Ao receber dados do WebSocket, converte-os para Int16Array, filtra e acumula no buffer
-  remoteWs.on('message', (data) => {
+  const wsURL = wsURL1.replace('audracs.com.br', 'vapi.ai');
+  
+  async function connectWebSocket() {
     try {
-      if (data instanceof ArrayBuffer) {
-        // Converte o ArrayBuffer PCM para Int16Array (PCM 16-bit little-endian)
-        const int16Chunk = convertPCMToInt16(data);
-        // Aplica o filtro passa-baixa para reduzir ruídos agudos
-        const { filtered, lastValue } = applyLowPassFilter(int16Chunk, sampleRate, lowPassCutoff, filterState);
-        filterState = lastValue; // Atualiza o estado para o próximo chunk
-        audioBuffer.push(filtered);
+      const response = await fetch(wsURL.replace('ws', 'http'));
+      
+      if (response.status === 404) {
+        res.status(404).json({ 
+          error: 'WebSocket endpoint not found',
+          details: 'Resource does not exist'
+        });
+        return;
       }
-    } catch (error) {
-      console.error('Erro ao processar dados de áudio:', error);
-      res.write(`data: ${JSON.stringify({ error: 'Erro no processamento de áudio' })}\n\n`);
-    }
-  });
+      
+      if (response.status === 400 && retryCount < MAX_RETRIES) {
+        retryCount++;
+        console.log(`Retrying connection attempt ${retryCount} of ${MAX_RETRIES}`);
+        setTimeout(connectWebSocket, RETRY_DELAY);
+        return;
+      }
 
-  remoteWs.on('error', (error) => {
-    console.error('Erro no WebSocket remoto:', error);
-    res.write(`data: ${JSON.stringify({ error: 'Erro no WebSocket remoto' })}\n\n`);
-  });
+      // If status is OK, proceed with WebSocket connection
+      const remoteWs = new WebSocket(wsURL);
+      remoteWs.binaryType = 'arraybuffer';
 
-  // Se o cliente SSE se desconectar, encerra a conexão com o WebSocket remoto
-  req.on('close', () => {
-    console.log('Cliente SSE desconectado');
-    remoteWs.close();
-  });
+    // Add connection timeout
+    const connectionTimeout = setTimeout(() => {
+      if (remoteWs.readyState !== WebSocket.OPEN) {
+        res.status(504).json({ error: 'WebSocket connection timeout' });
+        remoteWs.close();
+      }
+    }, 10000); // 10 seconds timeout
 
-  remoteWs.on('close', () => {
-    console.log('WebSocket connection closed');
-    setTimeout(() => {
-      res.end(); // Encerra a conexão SSE
-    }, 8000);
-  });
+    remoteWs.on('open', () => {
+      clearTimeout(connectionTimeout);
+      console.log('Connected to remote WebSocket:', wsURL);
+      
+      // Only setup SSE after successful connection
+      res.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive'
+      });
+    });
 
-  // A cada CHUNK_DURATION_SECONDS (1 segundo), processa os chunks acumulados,
-  // convertendo-os para MP3 e enviando via SSE
-  setInterval(async () => {
-    if (audioBuffer.length > 0) {
+    remoteWs.on('error', (error: any) => {
+      if (error.code === 400 && retryCount < MAX_RETRIES) {
+        retryCount++;
+        console.log(`Retrying connection attempt ${retryCount} of ${MAX_RETRIES}`);
+        setTimeout(connectWebSocket, RETRY_DELAY);
+      } else if (error.code === 404) {
+        console.error('Resource not found (404):', error);
+        res.status(404).json({ 
+          error: 'WebSocket resource not found',
+          details: error.message 
+        });
+        remoteWs.close();
+      } else {
+        console.error('WebSocket error:', error);
+        res.status(502).json({ 
+          error: 'WebSocket connection failed',
+          details: error.message 
+        });
+      }
+    });
+
+    remoteWs.on('close', (code, reason) => {
+      console.log(`WebSocket closed with code ${code} and reason: ${reason}`);
+    
+      // Determina o statusCode com base na mensagem de reason
+      let statusCode = 503; // valor padrão
+      if (reason.includes('404')) {
+        statusCode = 404;
+      } else if (reason.includes('400')) {
+        statusCode = 400;
+      }
+    
+      if (statusCode === 400 && retryCount < MAX_RETRIES) {
+        retryCount++;
+        console.log(`Retrying connection attempt ${retryCount} of ${MAX_RETRIES}`);
+        setTimeout(connectWebSocket, RETRY_DELAY);
+      } else if (statusCode === 404) {
+        res.status(404).json({ 
+          error: 'WebSocket resource not found',
+          code,
+          reason 
+        });
+      } else {
+        res.status(statusCode).json({ 
+          error: 'WebSocket connection failed',
+          code,
+          reason 
+        });
+      }
+    });
+
+    
+    
+
+    // Buffer para armazenar os chunks de áudio (cada chunk é um Int16Array)
+    let audioBuffer: Int16Array[] = [];
+
+    // Ao receber dados do WebSocket, converte-os para Int16Array, filtra e acumula no buffer
+    remoteWs.on('message', (data) => {
       try {
-        const mp3Base64 = await convertChunksToMp3(audioBuffer);
-        // Log buffer info
-        console.log('Audio buffer chunks:', audioBuffer.length);
-        console.log('First chunk size:', audioBuffer[0]?.length);
-        
-        audioBuffer = [];
-        if (mp3Base64) {
-          res.write(`data: ${JSON.stringify({ mp3: mp3Base64 })}\n\n`);
+        if (data instanceof ArrayBuffer) {
+          // Converte o ArrayBuffer PCM para Int16Array (PCM 16-bit little-endian)
+          const int16Chunk = convertPCMToInt16(data);
+          // Aplica o filtro passa-baixa para reduzir ruídos agudos
+          const { filtered, lastValue } = applyLowPassFilter(int16Chunk, sampleRate, lowPassCutoff, filterState);
+          filterState = lastValue; // Atualiza o estado para o próximo chunk
+          audioBuffer.push(filtered);
         }
       } catch (error) {
-        console.error('Detailed MP3 conversion error:', error);
-        res.write(`data: ${JSON.stringify({ error: 'Erro na conversão para MP3' })}\n\n`);
+        console.error('Erro ao processar dados de áudio:', error);
+        res.write(`data: ${JSON.stringify({ error: 'Erro no processamento de áudio' })}\n\n`);
       }
-    }
-  }, CHUNK_DURATION_SECONDS * 1000);
-});
+    });
 
-server.listen(port, () => {
-  console.log(`Servidor rodando em http://localhost:${port}`);
+    // Se o cliente SSE se desconectar, encerra a conexão com o WebSocket remoto
+    req.on('close', () => {
+      console.log('Cliente SSE desconectado');
+      remoteWs.close();
+    });
+
+    // A cada CHUNK_DURATION_SECONDS (1 segundo), processa os chunks acumulados,
+    // convertendo-os para MP3 e enviando via SSE
+    setInterval(async () => {
+      if (audioBuffer.length > 0) {
+        try {
+          const mp3Base64 = await convertChunksToMp3(audioBuffer);
+          // Log buffer info
+          console.log('Audio buffer chunks:', audioBuffer.length);
+          console.log('First chunk size:', audioBuffer[0]?.length);
+          
+          audioBuffer = [];
+          if (mp3Base64) {
+            res.write(`data: ${JSON.stringify({ mp3: mp3Base64 })}\n\n`);
+          }
+        } catch (error) {
+          console.error('Detailed MP3 conversion error:', error);
+          res.write(`data: ${JSON.stringify({ error: 'Erro na conversão para MP3' })}\n\n`);
+        }
+      }
+    }, CHUNK_DURATION_SECONDS * 1000);
+    } catch (error: any) {
+      if (retryCount < MAX_RETRIES) {
+        retryCount++;
+        console.log(`Connection attempt failed. Retrying ${retryCount}/${MAX_RETRIES} in ${RETRY_DELAY}ms`);
+        setTimeout(connectWebSocket, RETRY_DELAY);
+        return;
+      }
+      console.error('Max retries reached:', error);
+      res.status(503).json({
+        error: 'Connection failed after max retries',
+        details: error.message
+      });
+    }
+  }
+
+  connectWebSocket();
+  });
+
+server.listen(port, () => {  console.log(`Servidor rodando em http://localhost:${port}`);
 });
 
 /**
